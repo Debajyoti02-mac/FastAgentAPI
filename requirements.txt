@@ -1,0 +1,15 @@
+langchain_ollama
+langchain
+langchain-community
+langchain-groq
+chromadb
+sentence-transformers
+pypdf
+numexpr
+rank-bm25
+faiss-cpu 
+fastapi
+uvicorn
+ragas
+datasets
+langchain_huggingface
