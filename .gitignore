@@ -37,3 +37,7 @@ logs/
 # Python cache
 .pytest_cache/
 .mypy_cache/
+
+pyproject.toml
+uv.lock
+.python-version

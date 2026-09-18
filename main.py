@@ -1,5 +1,23 @@
 import warnings
 warnings.filterwarnings('ignore') 
+
+# Logging 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+logger = logging.getLogger(__name__)
+logger.info("Application started")
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+API_KEY = os.getenv("API_KEY")
 # PDF fetch 
 from langchain_community.document_loaders import PyPDFLoader 
 try:
@@ -70,6 +88,7 @@ response.content
 from langchain_core.messages import AIMessage
 def Hybrid_Rag(state:State):   
     query = state['messages'][-1].content
+    logger.info(f"RAG query: {query}")
     prompt = f""" 
     write the query based on only for symentic and keyword search :
     {query} """
@@ -91,12 +110,14 @@ def Hybrid_Rag(state:State):
     }
     distances = result['distances'][0]
     documents = result['documents'][0]
-    print(distances)
+    logger.info(f"Dense distances: {distances}")
     threshold = 1.5
     dense_chunks = []
     for dis , doc in zip(distances,documents):
         if threshold > dis :
             dense_chunks.append(doc)
+    logger.info(f"Dense results: {len(dense_chunks)}")
+
         # Keyword search connection
     scores = tokens.get_scores(query_rewrite.split())
     def get_keywords(scores,k=10):
@@ -105,6 +126,7 @@ def Hybrid_Rag(state:State):
         return [doc for doc , i in sorted_index[:k]]
     keywords=get_keywords(scores=scores , k=10)
     get_docs=[chunks[i]for i in keywords]
+    logger.info(f"Keyword results: {len(get_docs)}")
     
     rrf_tokens={}
     for rank , doc in enumerate(dense_chunks):
@@ -114,6 +136,7 @@ def Hybrid_Rag(state:State):
     
     marge = sorted(rrf_tokens.items(),key=lambda x:x[1] , reverse=True)
     top_docs = [i for i , x in marge[:5]]
+    logger.info(f"Final RRF documents: {len(top_docs)}")
     
     if not top_docs:
         content = "Not related content"
@@ -139,6 +162,9 @@ def calculator(execution: str):
     """
     Perform arithmetic calculations.
     """
+    if len(execution) > 200:
+        return "Expression too long."
+    logger.info(f"Calculator request: {execution}")
     try:
         result = numexpr.evaluate(execution)
         return str(result)
@@ -150,6 +176,7 @@ def weather(location:str):
     """
     Fetch the user provided location's Weather
     """
+    logger.info(f"Weather request: {location}")
     try:
         response = requests.get(
             f"https://wttr.in/{location}?format=3",
@@ -166,6 +193,9 @@ def web_search(query: str):
     """
     Search the web when retrieved context is insufficient.
     """
+    logger.info(f"Web search request: {query}")
+    if len(query) > 500:
+        return "Search query too long."
     try:
         search = DuckDuckGoSearchRun()
         result = search.run(query)
@@ -178,13 +208,31 @@ def web_search(query: str):
     except Exception as e:
         return f"Web search failed: {str(e)}"
     
+
+# File operations 
+
 import os
+
+SAFE_DIR = "agent_files"
+os.makedirs(SAFE_DIR, exist_ok=True)
+
+ALLOWED_OPERATIONS = {"create", "read", "append", "delete"}
 
 @tool
 def file_handler(operation: str, file_path: str, content: str = ""):
     """
     Handles basic file operations such as create, read, append, and delete.
     """
+
+    file_path = os.path.basename(file_path)
+    file_path = os.path.join(SAFE_DIR, file_path)
+    MAX_CONTENT_SIZE = 100_000  
+    
+    if operation not in ALLOWED_OPERATIONS:
+        return "Invalid file operation."
+    
+    if len(content.encode('utf-8')) > MAX_CONTENT_SIZE:
+        return "File is too large"
 
     if operation == "create":
         with open(file_path, "w") as file:
@@ -214,9 +262,19 @@ tools=[weather,calculator,web_search,file_handler]
 LLM_tool=LLM.bind_tools(tools)
 
 # connection 
-def tool_connection(state:State):
-    response = LLM_tool.invoke(state['messages'])
-    return {'messages':response}
+def tool_connection(state: State):
+    logger.info("LLM processing request")
+
+    response = LLM_tool.invoke(state["messages"])
+
+    if response.tool_calls:
+        logger.info(
+            f"Tool selected: {[tool['name'] for tool in response.tool_calls]}"
+        )
+    else:
+        logger.info("No tool selected")
+
+    return {"messages": response}
 
 # connection state 
 Graph = StateGraph(State)
@@ -245,21 +303,49 @@ response=connention.invoke({'messages':[HumanMessage(content="what is the curren
 result = response['messages'][-1].content
 
 # API Connection -------------------------------------------------------------------------
-from fastapi import FastAPI ,HTTPException , Depends
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+# create limiter 
+limiter = Limiter(key_func=get_remote_address)
+
+
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI ,HTTPException , Depends , Header 
 from database import QueryHistory , create_db
 app = FastAPI(title="api_system")
-from pydantic import BaseModel
+app.state.limiter = Limiter
+from pydantic import BaseModel ,Field
+
+# Its for cross origin resource shareing 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+allow_origins=["http://localhost:5173"]
+
+# Verify Api key 
+def verify_api_key(x_api_key: str = Header(...)):
+    if x_api_key != API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key"
+        )
 
 class QusAns(BaseModel):
-    question : str 
-    id : int = None
-    thread_id: str = "default"
-    limit : int = 100 
+    question : str = Field(min_length=1,max_length=1000) 
+    id : int = Field(default=None , gt=0)
+    thread_id: str = Field(default='default',min_length=1,max_length=100)
+    limit : int = Field(default=100 , gt=0, le=100)
     
 
     
 @app.put("/ask")
-def update(request:QusAns , db=Depends(create_db)):
+def update(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
+    verify_api_key(x_api_key)
     question = db.query(QueryHistory).filter(QueryHistory.id == request.id).first()
     if not question:
         raise HTTPException(status_code=400 , detail="questions not find out")
@@ -270,7 +356,8 @@ def update(request:QusAns , db=Depends(create_db)):
     return question
 
 @app.get("/ask")
-def fetch(db = Depends(create_db)):
+def fetch(db = Depends(create_db),x_api_key: str = Header(...)):
+    verify_api_key(x_api_key)
     try:
         questions = db.query(QueryHistory).all()
         return questions
@@ -278,7 +365,8 @@ def fetch(db = Depends(create_db)):
         raise HTTPException(status_code=400 , detail=str(e))
     
 @app.delete("/ask")
-def delete(requests:QusAns , db=Depends(create_db)):
+def delete(requests:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
+    verify_api_key(x_api_key)
     question = db.query(QueryHistory).filter(QueryHistory.id == requests.id).first()
     
     if not question:
@@ -292,9 +380,11 @@ def delete(requests:QusAns , db=Depends(create_db)):
         'delete':delete
     }
     
-
+@limiter.limit("5/minute")
 @app.post("/chat")
-def Question_Answer(request:QusAns , db=Depends(create_db)):
+def Question_Answer(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
+    verify_api_key(x_api_key)
+
     config = {
     "configurable": {
         "thread_id": request.thread_id
@@ -326,7 +416,7 @@ def Question_Answer(request:QusAns , db=Depends(create_db)):
             'answer':answer
         }
     except Exception as e :
-        raise HTTPException(status_code=400 , detail=str(e))
+        raise HTTPException(status_code=500 , detail='internal server error')
 
         
     

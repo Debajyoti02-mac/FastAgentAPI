@@ -13,3 +13,4 @@ uvicorn
 ragas
 datasets
 langchain_huggingface
+slowapi
