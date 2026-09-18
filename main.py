@@ -417,6 +417,24 @@ def Question_Answer(request:QusAns , db=Depends(create_db) , x_api_key: str = He
         }
     except Exception as e :
         raise HTTPException(status_code=500 , detail='internal server error')
+    
+from fastapi.responses import FileResponse
+
+@app.get("/files/{filename}")
+def get_file(filename: str, x_api_key: str = Header(...)):
+    verify_api_key(x_api_key)
+    path = os.path.join(SAFE_DIR, os.path.basename(filename))
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path) 
+
+@app.get("/download-db")
+def download_db(x_api_key: str = Header(...)):
+    verify_api_key(x_api_key)
+    db_path = ".SQL_DataBase.db"  # adjust if database.py points elsewhere
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail="Database not found")
+    return FileResponse(db_path, filename="database.db")
 
         
     
