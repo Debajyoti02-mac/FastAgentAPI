@@ -28,7 +28,7 @@ except Exception as e :
     
 # Split the given document 
 from langchain_text_splitters import RecursiveCharacterTextSplitter 
-text_spliter = RecursiveCharacterTextSplitter(chunk_size=1200 , chunk_overlap=180)
+text_spliter = RecursiveCharacterTextSplitter(chunk_size=800 , chunk_overlap=100)
 texts = text_spliter.split_documents(pages)
 
 chunks=[i.page_content for  i in texts]
@@ -135,7 +135,7 @@ def Hybrid_Rag(state:State):
         rrf_tokens[doc] = rrf_tokens.get(doc,0)+1/(rank+61)
     
     marge = sorted(rrf_tokens.items(),key=lambda x:x[1] , reverse=True)
-    top_docs = [i for i , x in marge[:5]]
+    top_docs = [i for i , x in marge[:3]]
     logger.info(f"Final RRF documents: {len(top_docs)}")
     
     if not top_docs:
@@ -342,7 +342,30 @@ class QusAns(BaseModel):
     limit : int = Field(default=100 , gt=0, le=100)
     
 
-    
+
+from fastapi import UploadFile, File
+
+@app.post("/upload-pdf")
+async def upload_pdf(file: UploadFile = File(...), x_api_key: str = Header(...)):
+    verify_api_key(x_api_key)
+
+    temp_path = os.path.join(SAFE_DIR, file.filename)
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+
+    new_loader = PyPDFLoader(temp_path)
+    new_pages = new_loader.load()
+    new_texts = text_spliter.split_documents(new_pages)
+
+    new_chunks = [t.page_content for t in new_texts]
+    new_metadata = [t.metadata for t in new_texts]
+    new_ids = [hashlib.md5(c.encode('utf-8')).hexdigest() for c in new_chunks]
+
+    collection.upsert(documents=new_chunks, ids=new_ids, metadatas=new_metadata)
+
+    return {"status": "indexed", "chunks_added": len(new_chunks)}
+  
+  
 @app.put("/ask")
 def update(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
