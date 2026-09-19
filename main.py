@@ -345,6 +345,7 @@ class QusAns(BaseModel):
 
 from fastapi import UploadFile, File
 
+# Its for upload pdf by users 
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...), x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
@@ -365,7 +366,7 @@ async def upload_pdf(file: UploadFile = File(...), x_api_key: str = Header(...))
 
     return {"status": "indexed", "chunks_added": len(new_chunks)}
   
-  
+
 @app.put("/ask")
 def update(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
@@ -402,7 +403,7 @@ def delete(requests:QusAns , db=Depends(create_db) , x_api_key: str = Header(...
         'status':'deleted',
         'delete':delete
     }
-    
+'''It basically do a limit option that do basically a limit option that do 5 question per minits'''
 @limiter.limit("5/minute")
 @app.post("/chat")
 def Question_Answer(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
