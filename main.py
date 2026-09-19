@@ -320,7 +320,7 @@ from pydantic import BaseModel ,Field
 # Its for cross origin resource shareing 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["https://your-ui-domain.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
