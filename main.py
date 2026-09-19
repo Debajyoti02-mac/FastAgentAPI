@@ -1,7 +1,7 @@
 import warnings
 warnings.filterwarnings('ignore') 
 
-# Logging : > To track out the behavior 
+# Logging : > To track out the behavior of my agent 
 import logging
 
 logging.basicConfig(
