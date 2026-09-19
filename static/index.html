@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FastAgent — Multi-Tool Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Marked for Markdown -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dark-theme">
+  <div class="app-layout">
+    <!-- Clean Minimalist Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-box">
+          <div class="brand-icon"><i data-lucide="terminal"></i></div>
+          <span class="brand-title">FastAgent</span>
+        </div>
+        <button class="mobile-close-btn" id="mobileCloseSidebarBtn" aria-label="Close Sidebar">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-tab="chat-tab" id="navChat">
+          <i data-lucide="message-square"></i>
+          <span>Chat</span>
+        </button>
+        <button class="nav-item" data-tab="editor-tab" id="navEditor">
+          <i data-lucide="code"></i>
+          <span>Code Editor</span>
+          <span class="nav-count" id="editorFilesBadge">0</span>
+        </button>
+        <button class="nav-item" data-tab="docs-tab" id="navDocs">
+          <i data-lucide="file-text"></i>
+          <span>Documents & PDF</span>
+          <span class="nav-count" id="docsCountBadge">0</span>
+        </button>
+        <button class="nav-item" data-tab="history-tab" id="navHistory">
+          <i data-lucide="clock"></i>
+          <span>History</span>
+          <span class="nav-count" id="historyCountBadge">0</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="system-status-pill">
+          <span class="status-dot"></span>
+          <span class="status-label" id="statusLabel">Ready</span>
+        </div>
+        <button class="db-export-btn" id="sidebarDownloadDbBtn" title="Download SQLite Database (.db)">
+          <i data-lucide="database"></i>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main App Container -->
+    <main class="main-content">
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="header-left">
+          <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open Navigation">
+            <i data-lucide="menu"></i>
+          </button>
+          <span class="header-title" id="pageTitle">Chat</span>
+        </div>
+        <div class="header-right">
+          <div class="session-box">
+            <span>Thread:</span>
+            <input type="text" id="threadInput" class="thread-input" value="user_1" title="Conversation Thread ID" />
+          </div>
+        </div>
+      </header>
+
+      <!-- 1. CHAT TAB -->
+      <section class="tab-pane active" id="chat-tab">
+        <div class="chat-wrapper">
+          <!-- Quick Prompts Bar -->
+          <div class="quick-prompts-bar">
+            <span class="chips-title">Tools:</span>
+            <button class="chip-btn" data-prompt="Summarize the uploaded PDF document for me">
+              <i data-lucide="file-search"></i> Summarize PDF
+            </button>
+            <button class="chip-btn" data-prompt="What is the current weather in Kolkata?">
+              <i data-lucide="cloud"></i> Weather
+            </button>
+            <button class="chip-btn" data-prompt="Calculate (15 * 84) / 3 + 2.5^2">
+              <i data-lucide="hash"></i> Calculator
+            </button>
+            <button class="chip-btn" data-prompt="Read the file File.txt in agent_files and tell me its contents">
+              <i data-lucide="folder"></i> Read File
+            </button>
+            <button class="chip-btn" data-prompt="Create a file named notes.txt with 3 points about AI">
+              <i data-lucide="file-plus"></i> Create File
+            </button>
+          </div>
+
+          <!-- Messages Container -->
+          <div class="chat-messages" id="chatMessages">
+            <div class="message-row agent-row">
+              <div class="msg-bubble">
+                <div class="msg-header">Agent</div>
+                <div class="msg-body markdown-content">
+                  <p>Agent is ready. You can ask questions, evaluate math, check live weather, search the web, inspect your uploaded PDFs, or read/write files in <code>agent_files/</code>.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Chat Input -->
+          <div class="chat-input-area">
+            <form id="chatForm" class="chat-input-form">
+              <textarea 
+                id="chatInput" 
+                rows="1" 
+                placeholder="Type a message or tool request..." 
+                required
+              ></textarea>
+              <button type="submit" id="sendBtn" class="send-button" title="Send message">
+                <i data-lucide="arrow-up"></i>
+              </button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. CODE EDITOR TAB -->
+      <section class="tab-pane" id="editor-tab">
+        <div class="editor-container">
+          <!-- File Sidebar in Editor -->
+          <div class="editor-sidebar">
+            <div class="editor-sidebar-header">
+              <span>Files in <code>agent_files/</code></span>
+              <button class="icon-btn-sm" id="editorNewFileBtn" title="Create New File">
+                <i data-lucide="file-plus"></i>
+              </button>
+            </div>
+            <div class="editor-file-list" id="editorFileList">
+              <!-- Rendered file list items -->
+            </div>
+          </div>
+
+          <!-- Main Code Editor Surface -->
+          <div class="editor-workspace">
+            <div class="editor-toolbar">
+              <div class="editor-filename-box">
+                <i data-lucide="file-code"></i>
+                <input type="text" id="editorFilenameInput" placeholder="filename.txt (e.g. script.py, notes.txt)" />
+              </div>
+              <div class="editor-actions">
+                <button class="btn btn-sm btn-secondary" id="editorReloadBtn" title="Reload from disk">
+                  <i data-lucide="refresh-cw"></i> Reload
+                </button>
+                <button class="btn btn-sm btn-danger" id="editorDeleteBtn" title="Delete file">
+                  <i data-lucide="trash-2"></i> Delete
+                </button>
+                <button class="btn btn-sm btn-primary" id="editorSaveBtn" title="Save file (Ctrl+S)">
+                  <i data-lucide="save"></i> Save File
+                </button>
+              </div>
+            </div>
+
+            <!-- Code Editor Textarea -->
+            <div class="editor-textarea-wrap">
+              <textarea id="editorContentInput" class="editor-textarea" placeholder="// Write code or text content here..."></textarea>
+            </div>
+
+            <div class="editor-statusbar">
+              <span id="editorStatusText">No file selected</span>
+              <span id="editorCharCount">0 chars</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. DOCUMENTS & PDF TAB -->
+      <section class="tab-pane" id="docs-tab">
+        <div class="content-panel">
+          <div class="panel-header">
+            <h3>Documents &amp; PDF Ingestion</h3>
+            <p>Upload your own PDF files. The backend indexes them into ChromaDB and BM25 so the agent can read and summarize them.</p>
+          </div>
+
+          <!-- Upload Dropzone -->
+          <div class="upload-dropzone" id="pdfDropZone">
+            <i data-lucide="upload-cloud"></i>
+            <p>Click or drag &amp; drop a PDF file here to upload</p>
+            <input type="file" id="pdfFileInput" accept="application/pdf" style="display:none;" />
+          </div>
+
+          <!-- Upload Progress -->
+          <div id="uploadProgress" class="upload-progress" style="display:none;">
+            <div class="upload-progress-info">
+              <span id="uploadFileName">file.pdf</span>
+              <span id="uploadProgressText">Processing...</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" id="uploadProgressBar"></div></div>
+          </div>
+
+          <!-- Document List -->
+          <div class="doc-list-section">
+            <h4>Available Documents</h4>
+            <div class="doc-cards-grid" id="docCardsGrid">
+              <!-- Rendered document cards -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. HISTORY TAB -->
+      <section class="tab-pane" id="history-tab">
+        <div class="content-panel">
+          <div class="panel-header flex-between">
+            <div>
+              <h3>Query History</h3>
+              <p>Stored queries and responses in SQLite database.</p>
+            </div>
+            <div class="panel-actions">
+              <button class="btn btn-sm btn-secondary" id="refreshHistoryBtn">
+                <i data-lucide="refresh-cw"></i> Refresh
+              </button>
+              <button class="btn btn-sm btn-secondary" id="downloadDbBtn">
+                <i data-lucide="download"></i> Download .db
+              </button>
+            </div>
+          </div>
+
+          <div class="search-box">
+            <i data-lucide="search"></i>
+            <input type="text" id="historySearchInput" placeholder="Search questions or answers..." />
+          </div>
+
+          <div class="history-items" id="historyList">
+            <!-- Rendered history records -->
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Toast Notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

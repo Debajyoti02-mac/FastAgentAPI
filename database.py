@@ -12,18 +12,31 @@ DATABASE_URL = os.getenv(
 
 
 # Create engine
+fallback_sqlite = "sqlite:///.SQL_DataBase.db"
+
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(
         DATABASE_URL,
         connect_args={"check_same_thread": False}
     )
 else:
-    DATABASE_URL = DATABASE_URL.replace(
-        "postgresql://",
-        "postgresql+psycopg://",
-        1
-    )
-    engine = create_engine(DATABASE_URL)
+    try:
+        pg_url = DATABASE_URL.replace(
+            "postgresql://",
+            "postgresql+psycopg://",
+            1
+        )
+        temp_engine = create_engine(pg_url)
+        # Verify connection
+        with temp_engine.connect() as conn:
+            pass
+        engine = temp_engine
+    except Exception as e:
+        print(f"[database.py] PostgreSQL connection error ({e}). Falling back to SQLite: {fallback_sqlite}")
+        engine = create_engine(
+            fallback_sqlite,
+            connect_args={"check_same_thread": False}
+        )
 
 
 # Declare base
