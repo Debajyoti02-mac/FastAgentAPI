@@ -46,22 +46,19 @@ client = chromadb.PersistentClient(path="./VectorDB")
 
 collection = client.get_or_create_collection(name="System",embedding_function=embedding_function)
 
-if collection.count() == 0:
+if collection.count()!=len(chunks):
     collection.upsert(
         documents=chunks,
-        ids=ids, 
+        ids=ids , 
         metadatas=metadata
     )
-
-# Sync chunks and BM25 with all stored documents in collection
-all_stored = collection.get()
-if all_stored and all_stored.get('documents'):
-    chunks = all_stored['documents']
+collection.count()
 
 # Hybrid connection
 from rank_bm25 import BM25Okapi 
-token_corpus = [i.split() for i in chunks if i]
-tokens = BM25Okapi(token_corpus) if token_corpus else BM25Okapi([["empty"]])
+token_corpus = [i.split() for i in chunks]
+tokens = BM25Okapi(token_corpus)
+tokens
 
 # Langgraph State Building 
 from langgraph.graph import StateGraph , START 
@@ -84,75 +81,75 @@ from dotenv import load_dotenv
 load_dotenv()
 os.getenv('GROQ_API_KEY')
 LLM = ChatGroq(model='openai/gpt-oss-120b')
+response = LLM.invoke('hello')
+response.content
 
 # Hybrid Retrival 
 from langchain_core.messages import AIMessage
 def Hybrid_Rag(state:State):   
     query = state['messages'][-1].content
     logger.info(f"RAG query: {query}")
-    prompt = f"""Write the query focused for semantic and keyword search:\n{query}"""
-    try:
-        query_rewrite = LLM.invoke(prompt).content
-    except Exception:
-        query_rewrite = query
+    prompt = f""" 
+    write the query based on only for symentic and keyword search :
+    {query} """
+    query_rewrite = LLM.invoke(prompt).content
     
-    dense_chunks = []
     try:
-        cnt = collection.count()
-        if cnt > 0:
-            result = collection.query(
-                query_texts=[query_rewrite],
-                n_results=min(5, cnt)
-            )
-            distances = result['distances'][0] if result.get('distances') else []
-            documents = result['documents'][0] if result.get('documents') else []
-            threshold = 1.6
-            dense_chunks = [doc for dis, doc in zip(distances, documents) if dis < threshold]
-            if not dense_chunks and documents:
-                dense_chunks = documents[:3]
-    except Exception as e:
-        logger.warning(f"Dense retrieval warning: {e}")
+        result = collection.query(
+        query_texts=[query_rewrite],
+        n_results=3
+        )
 
-    # Keyword search connection
-    get_docs = []
-    try:
-        search_words = [w for w in (query_rewrite.split() or query.split()) if len(w) > 1]
-        if search_words and chunks:
-            scores = tokens.get_scores(search_words)
-            sorted_index = sorted(list(enumerate(scores)), key=lambda x: x[1], reverse=True)
-            get_docs = [chunks[i] for i, score in sorted_index[:10] if score > 0]
-            if not get_docs and sorted_index:
-                get_docs = [chunks[i] for i, score in sorted_index[:3]]
     except Exception as e:
-        logger.warning(f"Keyword retrieval warning: {e}")
+        return {
+        "messages": [
+            AIMessage(
+                content=f"Retrieval failed: {str(e)}"
+            )
+        ]
+    }
+    distances = result['distances'][0]
+    documents = result['documents'][0]
+    logger.info(f"Dense distances: {distances}")
+    threshold = 1.5
+    dense_chunks = []
+    for dis , doc in zip(distances,documents):
+        if threshold > dis :
+            dense_chunks.append(doc)
+    logger.info(f"Dense results: {len(dense_chunks)}")
+
+        # Keyword search connection
+    scores = tokens.get_scores(query_rewrite.split())
+    def get_keywords(scores,k=10):
+        index = list(enumerate(scores))
+        sorted_index = sorted(index , key = lambda x:x[1] , reverse=True)
+        return [doc for doc , i in sorted_index[:k]]
+    keywords=get_keywords(scores=scores , k=10)
+    get_docs=[chunks[i]for i in keywords]
+    logger.info(f"Keyword results: {len(get_docs)}")
     
-    rrf_tokens = {}
-    for rank, doc in enumerate(dense_chunks):
-        rrf_tokens[doc] = rrf_tokens.get(doc, 0) + 1 / (rank + 61)
-    for rank, doc in enumerate(get_docs):
-        rrf_tokens[doc] = rrf_tokens.get(doc, 0) + 1 / (rank + 61)
+    rrf_tokens={}
+    for rank , doc in enumerate(dense_chunks):
+        rrf_tokens[doc] = rrf_tokens.get(doc,0)+1/(rank+61)
+    for rank,doc in enumerate(get_docs):
+        rrf_tokens[doc] = rrf_tokens.get(doc,0)+1/(rank+61)
     
-    marge = sorted(rrf_tokens.items(), key=lambda x: x[1], reverse=True)
-    top_docs = [i for i, x in marge[:4]]
+    marge = sorted(rrf_tokens.items(),key=lambda x:x[1] , reverse=True)
+    top_docs = [i for i , x in marge[:3]]
     logger.info(f"Final RRF documents: {len(top_docs)}")
     
-    available_files = os.listdir(SAFE_DIR) if os.path.exists(SAFE_DIR) else []
-    files_info = f"\nFiles currently in sandbox (agent_files): {', '.join(available_files)}" if available_files else ""
-    
     if not top_docs:
-        content = "No specific vector document match found."
-    else:
-        content = "\n\n".join(top_docs)
-
-    return {"messages": [AIMessage(content=f"""Use this retrieved document context to answer the user's question:
+        content = "Not related content"
+    
+    else : content = "\n\n".join(top_docs)
+    return {"messages": [AIMessage(content=f"""
+Use this retrieved context to answer the user's question:
 
 {content}
-{files_info}
-
-Note: If the user asks about or wants to read a specific file or PDF in the sandbox, you have the file_handler tool (read operation) to read files directly.
 
 User question:
-{query}""")]}
+{query}
+""")]}
 
 # Tool creation 
 from langchain_core.tools import tool 
@@ -219,85 +216,46 @@ import os
 SAFE_DIR = "agent_files"
 os.makedirs(SAFE_DIR, exist_ok=True)
 
-SAFE_DIR = "agent_files"
-os.makedirs(SAFE_DIR, exist_ok=True)
+ALLOWED_OPERATIONS = {"create", "read", "append", "delete"}
 
 @tool
-def file_handler(operation: str, file_path: str = "", content: str = ""):
+def file_handler(operation: str, file_path: str, content: str = ""):
     """
-    Handles file operations in agent_files directory.
-    Supported operations:
-      - 'create' or 'write': create or overwrite a file with content
-      - 'read' or 'view': read text files or extract text from PDF files
-      - 'append': append content to an existing file
-      - 'delete': delete a file
-      - 'list': list all files currently in agent_files
+    Handles basic file operations such as create, read, append, and delete.
     """
-    op = (operation or "").lower().strip()
+
+    file_path = os.path.basename(file_path)
+    file_path = os.path.join(SAFE_DIR, file_path)
+    MAX_CONTENT_SIZE = 100_000  
     
-    if op in ("list", "ls", "dir"):
-        files = os.listdir(SAFE_DIR) if os.path.exists(SAFE_DIR) else []
-        return f"Files in agent_files: {', '.join(files) if files else 'Directory is empty'}"
+    if operation not in ALLOWED_OPERATIONS:
+        return "Invalid file operation."
+    
+    if len(content.encode('utf-8')) > MAX_CONTENT_SIZE:
+        return "File is too large"
 
-    filename = os.path.basename(file_path.strip()) if file_path else ""
-    if not filename:
-        return "Please specify a file_path or filename."
-        
-    full_path = os.path.join(SAFE_DIR, filename)
-    MAX_CONTENT_SIZE = 200_000
+    if operation == "create":
+        with open(file_path, "w") as file:
+            file.write(content)
+        return f"File created: {file_path}"
 
-    if op in ("create", "write", "new"):
-        if len(content.encode('utf-8')) > MAX_CONTENT_SIZE:
-            return "File content exceeds size limit."
-        with open(full_path, "w", encoding="utf-8", errors="replace") as f:
-            f.write(content)
-        return f"File '{filename}' created successfully in agent_files ({len(content)} characters)."
+    elif operation == "read":
+        with open(file_path, "r") as file:
+            return file.read()
 
-    elif op in ("read", "view", "open", "cat"):
-        target = full_path
-        if not os.path.exists(target):
-            # Check root directory fallback
-            if os.path.exists(filename):
-                target = filename
-            else:
-                avail = ", ".join(os.listdir(SAFE_DIR)) if os.path.exists(SAFE_DIR) else ""
-                return f"File '{filename}' not found. Available files: {avail if avail else 'None'}"
+    elif operation == "append":
+        with open(file_path, "a") as file:
+            file.write(content)
+        return f"Content added to: {file_path}"
 
-        # If it's a PDF, extract text using PyPDFLoader so the LLM can read user uploaded PDFs!
-        if filename.lower().endswith('.pdf'):
-            try:
-                loader = PyPDFLoader(target)
-                pages = loader.load()
-                pdf_text = "\n\n".join([f"--- Page {i+1} ---\n{p.page_content}" for i, p in enumerate(pages)])
-                if len(pdf_text) > 8000:
-                    return f"PDF '{filename}' ({len(pages)} pages, first 8000 chars):\n\n" + pdf_text[:8000]
-                return f"PDF '{filename}' ({len(pages)} pages):\n\n" + pdf_text
-            except Exception as e:
-                return f"Error reading PDF '{filename}': {str(e)}"
-
-        try:
-            with open(target, "r", encoding="utf-8", errors="replace") as f:
-                data = f.read()
-            if len(data) > 10000:
-                return data[:10000] + f"\n... [Truncated {len(data)-10000} remaining characters]"
-            return data
-        except Exception as e:
-            return f"Error reading file '{filename}': {str(e)}"
-
-    elif op in ("append", "add"):
-        mode = "a" if os.path.exists(full_path) else "w"
-        with open(full_path, mode, encoding="utf-8", errors="replace") as f:
-            f.write(content)
-        return f"Content successfully added to '{filename}'."
-
-    elif op in ("delete", "remove", "rm"):
-        if os.path.exists(full_path):
-            os.remove(full_path)
-            return f"File '{filename}' deleted."
-        return f"File '{filename}' not found."
+    elif operation == "delete":
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            return f"File deleted: {file_path}"
+        return "File not found."
 
     else:
-        return f"Unknown operation '{operation}'. Supported operations: create, read, append, delete, list."
+        return "Invalid operation."
     
 #tool blind 
 tools=[weather,calculator,web_search,file_handler]
@@ -341,9 +299,11 @@ connention = Graph.compile(checkpointer=memory)
 connention
 
 from langchain_core.messages import HumanMessage
+response=connention.invoke({'messages':[HumanMessage(content="what is the current weather in kolkata and situation?")]},config=config)
+result = response['messages'][-1].content
 
 # API Connection -------------------------------------------------------------------------
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 # create limiter 
@@ -354,51 +314,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI ,HTTPException , Depends , Header 
 from database import QueryHistory , create_db
 app = FastAPI(title="api_system")
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.state.limiter = Limiter
 from pydantic import BaseModel ,Field
 
-# Cross origin resource sharing
+# Its for cross origin resource shareing 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://your-ui-domain.netlify.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+allow_origins=["http://localhost:5173"]
 
-# Verify Api key (quiet local fallback so UI doesn't require manual auth)
-def verify_api_key(x_api_key: str = Header(default=None)):
-    if x_api_key is None or x_api_key == "" or x_api_key == "default" or x_api_key == API_KEY:
-        return True
+# Verify Api key 
+def verify_api_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
         raise HTTPException(
             status_code=401,
             detail="Invalid API key"
         )
-    return True
 
 class QusAns(BaseModel):
     question : str = Field(min_length=1,max_length=1000) 
     id : int = Field(default=None , gt=0)
     thread_id: str = Field(default='default',min_length=1,max_length=100)
     limit : int = Field(default=100 , gt=0, le=100)
+    
 
-class SaveFileModel(BaseModel):
-    filename: str
-    content: str
 
 from fastapi import UploadFile, File
 
-# Upload PDF and update both ChromaDB and BM25 index
+# Its for upload pdf by users 
 @app.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...), x_api_key: str = Header(default=None)):
+async def upload_pdf(file: UploadFile = File(...), x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
 
     temp_path = os.path.join(SAFE_DIR, file.filename)
-    content_bytes = await file.read()
     with open(temp_path, "wb") as f:
-        f.write(content_bytes)
+        f.write(await file.read())
 
     new_loader = PyPDFLoader(temp_path)
     new_pages = new_loader.load()
@@ -408,17 +362,13 @@ async def upload_pdf(file: UploadFile = File(...), x_api_key: str = Header(defau
     new_metadata = [t.metadata for t in new_texts]
     new_ids = [hashlib.md5(c.encode('utf-8')).hexdigest() for c in new_chunks]
 
-    if new_chunks:
-        collection.upsert(documents=new_chunks, ids=new_ids, metadatas=new_metadata)
-        global chunks, tokens
-        chunks.extend(new_chunks)
-        token_corpus = [c.split() for c in chunks if c]
-        tokens = BM25Okapi(token_corpus)
+    collection.upsert(documents=new_chunks, ids=new_ids, metadatas=new_metadata)
 
-    return {"status": "indexed", "filename": file.filename, "chunks_added": len(new_chunks)}
+    return {"status": "indexed", "chunks_added": len(new_chunks)}
+  
 
 @app.put("/ask")
-def update(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(default=None)):
+def update(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
     question = db.query(QueryHistory).filter(QueryHistory.id == request.id).first()
     if not question:
@@ -430,7 +380,7 @@ def update(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(defa
     return question
 
 @app.get("/ask")
-def fetch(db = Depends(create_db),x_api_key: str = Header(default=None)):
+def fetch(db = Depends(create_db),x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
     try:
         questions = db.query(QueryHistory).all()
@@ -439,7 +389,7 @@ def fetch(db = Depends(create_db),x_api_key: str = Header(default=None)):
         raise HTTPException(status_code=400 , detail=str(e))
     
 @app.delete("/ask")
-def delete(requests:QusAns , db=Depends(create_db) , x_api_key: str = Header(default=None)):
+def delete(requests:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
     question = db.query(QueryHistory).filter(QueryHistory.id == requests.id).first()
     
@@ -453,22 +403,23 @@ def delete(requests:QusAns , db=Depends(create_db) , x_api_key: str = Header(def
         'status':'deleted',
         'delete':delete
     }
-
 '''It basically do a limit option that do basically a limit option that do 5 question per minits'''
 @limiter.limit("5/minute")
 @app.post("/chat")
-def Question_Answer(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(default=None)):
+def Question_Answer(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
 
     config = {
-        "configurable": {
-            "thread_id": request.thread_id
-        }
+    "configurable": {
+        "thread_id": request.thread_id
     }
+}
     try:
         result = connention.invoke({
-            'messages': [HumanMessage(content=request.question)]
-        }, config=config)
+            'messages':
+                [HumanMessage(content=request.question)]
+                
+        },config=config)
         answer = result['messages'][-1].content
 
         db_question = QueryHistory(
@@ -482,161 +433,32 @@ def Question_Answer(request:QusAns , db=Depends(create_db) , x_api_key: str = He
         db.refresh(db_question)
         
         return {
-            'question': db_question.question,
-            'limit': db_question.limit,
+            
+            'question':db_question.question,
+            'limit':db_question.limit,
             'id': db_question.id , 
-            'answer': answer
+            'answer':answer
         }
     except Exception as e :
-        err_msg = str(e)
-        logger.error(f"Chat execution error: {err_msg}")
-        if "rate_limit_exceeded" in err_msg or "429" in err_msg:
-            return {
-                'question': request.question,
-                'limit': request.limit,
-                'id': 0,
-                'answer': "⚠️ **Groq Rate Limit**: The Groq API rate limit has been reached for this token window. Please wait 2-3 minutes and try again."
-            }
-        raise HTTPException(status_code=500 , detail=f"Server error: {err_msg}")
+        raise HTTPException(status_code=500 , detail='internal server error')
     
 from fastapi.responses import FileResponse
 
 @app.get("/files/{filename}")
-def get_file(filename: str, x_api_key: str = Header(default=None)):
+def get_file(filename: str, x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
     path = os.path.join(SAFE_DIR, os.path.basename(filename))
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path) 
 
-@app.get("/api/files")
-def list_sandbox_files(x_api_key: str = Header(default=None)):
-    verify_api_key(x_api_key)
-    files = []
-    if os.path.exists(SAFE_DIR):
-        for f in sorted(os.listdir(SAFE_DIR)):
-            fp = os.path.join(SAFE_DIR, f)
-            if os.path.isfile(fp):
-                files.append({
-                    "filename": f,
-                    "size": os.path.getsize(fp),
-                    "modified": os.path.getmtime(fp)
-                })
-    return files
-
-# Code Editor API Endpoints
-@app.get("/api/file-content/{filename}")
-def get_file_content(filename: str, x_api_key: str = Header(default=None)):
-    verify_api_key(x_api_key)
-    clean_name = os.path.basename(filename)
-    path = os.path.join(SAFE_DIR, clean_name)
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return {"filename": clean_name, "content": f.read()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/save-file")
-def save_file_endpoint(req: SaveFileModel, x_api_key: str = Header(default=None)):
-    verify_api_key(x_api_key)
-    clean_name = os.path.basename(req.filename.strip())
-    if not clean_name:
-        raise HTTPException(status_code=400, detail="Filename required")
-    path = os.path.join(SAFE_DIR, clean_name)
-    try:
-        with open(path, "w", encoding="utf-8", errors="replace") as f:
-            f.write(req.content)
-        return {"status": "saved", "filename": clean_name, "size": len(req.content)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/api/delete-file/{filename}")
-def delete_file_endpoint(filename: str, x_api_key: str = Header(default=None)):
-    verify_api_key(x_api_key)
-    clean_name = os.path.basename(filename)
-    path = os.path.join(SAFE_DIR, clean_name)
-    if os.path.exists(path):
-        try:
-            os.remove(path)
-            return {"status": "deleted", "filename": clean_name}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    raise HTTPException(status_code=404, detail="File not found")
-
-@app.get("/api/status")
-def get_system_status(x_api_key: str = Header(default=None), db=Depends(create_db)):
-    authenticated = bool(x_api_key and x_api_key == API_KEY)
-    history_count = 0
-    try:
-        history_count = db.query(QueryHistory).count()
-    except Exception:
-        pass
-    
-    files_in_sandbox = []
-    if os.path.exists(SAFE_DIR):
-        for f in os.listdir(SAFE_DIR):
-            fp = os.path.join(SAFE_DIR, f)
-            if os.path.isfile(fp):
-                files_in_sandbox.append({
-                    "filename": f,
-                    "size": os.path.getsize(fp),
-                    "modified": os.path.getmtime(fp)
-                })
-                
-    vector_count = 0
-    try:
-        vector_count = collection.count()
-    except Exception:
-        pass
-
-    pdf_name = "Why_Language_Models_Hallucinate_Explainer.pdf"
-    pdf_exists = os.path.exists(pdf_name)
-    pdf_size = os.path.getsize(pdf_name) if pdf_exists else 0
-
-    return {
-        "status": "online",
-        "authenticated": authenticated,
-        "collection_name": "System",
-        "vector_chunks": vector_count,
-        "query_history_count": history_count,
-        "sandbox_files": files_in_sandbox,
-        "default_pdf": {
-            "filename": pdf_name,
-            "exists": pdf_exists,
-            "size": pdf_size
-        },
-        "tools_available": ["calculator", "weather", "web_search", "file_handler"],
-        "model": "openai/gpt-oss-120b"
-    }
-
-@app.api_route("/pdf/explainer", methods=["GET", "HEAD"])
-def get_explainer_pdf():
-    pdf_path = "Why_Language_Models_Hallucinate_Explainer.pdf"
-    if not os.path.exists(pdf_path):
-        raise HTTPException(status_code=404, detail="Explainer PDF not found")
-    return FileResponse(pdf_path, media_type="application/pdf", filename=pdf_path)
-
 @app.get("/download-db")
-def download_db(x_api_key: str = Header(default=None)):
+def download_db(x_api_key: str = Header(...)):
     verify_api_key(x_api_key)
-    db_path = ".SQL_DataBase.db"
+    db_path = ".SQL_DataBase.db"  # adjust if database.py points elsewhere
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="Database not found")
     return FileResponse(db_path, filename="database.db")
-
-from fastapi.staticfiles import StaticFiles
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-@app.api_route("/", methods=["GET", "HEAD"])
-def serve_ui():
-    index_file = os.path.join("static", "index.html")
-    if os.path.exists(index_file):
-        return FileResponse(index_file)
-    return {"message": "FastAgentAPI is running. Place index.html in static/"}
-
 
         
     
