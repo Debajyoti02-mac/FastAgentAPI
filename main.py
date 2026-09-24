@@ -404,6 +404,7 @@ def delete(requests:QusAns , db=Depends(create_db) , x_api_key: str = Header(...
         'delete':delete
     }
 '''It basically do a limit option that do basically a limit option that do 5 question per minits'''
+
 @limiter.limit("5/minute")
 @app.post("/chat")
 def Question_Answer(request:QusAns , db=Depends(create_db) , x_api_key: str = Header(...)):
